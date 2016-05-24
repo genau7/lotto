@@ -5,6 +5,9 @@
 #include <string>
 #include <math.h>
 #include <cmath>
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define R 2
 #define G 1
@@ -81,22 +84,105 @@ char windowName[30] = "HSV vals";
 
 struct Img {
 	cv::Mat originalImg;
-	cv::Mat binaryFromBlue;
+	cv::Mat_<cv::Vec3b> binaryFromBlue;
+	cv::Mat segmented; 
 	int** labels;
 	std::string name;
+	int rows, cols;
 
 	void init(std::string filename){
 		originalImg = cv::imread(filename.c_str());
 		name = filename;
-		labels = new int*[originalImg.rows];
-		for (int j = 0; j < originalImg.cols; ++j)
-			labels[j] = new int[originalImg.cols];
+		rows = originalImg.rows;
+		cols = originalImg.cols;
+		cv::Mat temp(originalImg.size(), CV_8U);
+		segmented = temp;
+		labels = new int*[rows];
+		for (int j = 0; j < cols; ++j)
+			labels[j] = new int[cols];
 		
 	}
 
 	void show(){
 		//cv::imshow(name.c_str(), originalImg);
 		cv::imshow(name.c_str(), binaryFromBlue);
+	}
+
+	void showSegments(){
+		cv::imshow(name.c_str(), segmented);
+	}
+	void colorSegments(){
+		cv::Mat_<uchar> temp = segmented;
+		for (int i = 0; i < rows; ++i)
+			for (int j = 0; j < cols; ++j) {
+				temp(i, j) = (labels[i][j] * 10) % 255;
+			}
+		segmented = temp;
+	}
+
+	void labelPixels(){
+		int count = 1;
+		for (int i = 0; i < rows; ++i)
+			for (int j = 0; j < cols; ++j) {
+				if (binaryFromBlue(i, j)[0] != 0)
+					labels[i][j] = count++;
+				else
+					labels[i][j] = 0;
+
+			}
+	}
+
+	bool topDownPass(){
+		bool change = false;
+		int windowSize = 3;
+		for (int i = 1; i < rows - 1; ++i)
+			for (int j = 1; j < cols - 1; ++j){
+				if (labels[i][j] != 0){
+					int min = labels[i][j];
+					if (labels[i][j - 1] < min && labels[i][j - 1] > 0)
+						min = labels[i][j - 1];
+					if (labels[i - 1][j - 1] < min && labels[i - 1][j - 1] > 0)
+						min = labels[i - 1][j - 1];
+					if (labels[i - 1][j] < min && labels[i - 1][j] > 0)
+						min = labels[i - 1][j];
+					if (labels[i - 1][j + 1] < min && labels[i - 1][j + 1] > 0)
+						min = labels[i - 1][j + 1];
+					if (labels[i][j + 1] < min && labels[i][j + 1] > 0)
+						min = labels[i][j + 1];
+
+					if (min != labels[i][j]){
+						change = true;
+						labels[i][j] = min;
+					}
+				}
+			}
+		return change;
+	}
+	bool bottomUpPass(){
+		bool change = false;
+		int windowSize = 3;
+		for (int i = rows -1; i > 1; ++i)
+			for (int j = cols -1; j > 1; ++j){
+				if (labels[i][j] != 0){
+					int min = labels[i][j];
+					if (labels[i][j - 1] < min && labels[i][j - 1] > 0)
+						min = labels[i][j - 1];
+					if (labels[i + 1][j - 1] < min && labels[i + 1][j - 1] > 0)
+						min = labels[i + 1][j - 1];
+					if (labels[i + 1][j] < min && labels[i + 1][j] > 0)
+						min = labels[i + 1][j];
+					if (labels[i + 1][j + 1] < min && labels[i + 1][j + 1] > 0)
+						min = labels[i + 1][j + 1];
+					if (labels[i][j + 1] < min && labels[i][j + 1] > 0)
+						min = labels[i][j + 1];
+
+					if (min != labels[i][j]){
+						change = true;
+						labels[i][j] = min;
+					}
+				}
+			}
+		return change;
 	}
 };
 
@@ -608,6 +694,7 @@ void erode(cv::Mat & src){
 	src = result;
 }
 int main(int, char *[]) {
+	
     std::cout << "Start ..." << std::endl;
 	loadImgs();	
 	/*source = originalImgs[2];
@@ -617,23 +704,19 @@ int main(int, char *[]) {
 	//cv::Mat HSV[n];
 	//char name[20];
 	
-	for (int i = 0; i < 2; i++){
+	for (int i = 0; i < 3; i++){
 		images[i].binaryFromBlue = thresholdHue(images[i].originalImg, 85, 110);
 		dilate3(images[i].binaryFromBlue, 3);
 		erode(images[i].binaryFromBlue);
 		erode(images[i].binaryFromBlue);
 		dilate7(images[i].binaryFromBlue, 7);
 		dilate3(images[i].binaryFromBlue, 3);
-		images[i].show();
-		/*
-		HSV[i] = thresholdHue(originalImgs[i], 85, 110);
-		dilate3(HSV[i], 3);
-		erode(HSV[i]);
-		erode(HSV[i]);
-		dilate7(HSV[i],7);
-		dilate3(HSV[i], 3); //?
-		sprintf(name, "HSV[%d]", i);
-		cv::imshow(name, HSV[i]);*/
+		images[i].labelPixels();
+		images[i].topDownPass();
+		images[i].bottomUpPass();
+		images[i].colorSegments();
+		images[i].showSegments();
+	//	images[i].show();
 	}
 
 	//images[0].show();
