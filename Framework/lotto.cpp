@@ -112,7 +112,6 @@ public:
 	int index;
 	int rows, cols;
 	BinaryArray binaryValues;
-	//uchar ** binaryValues;
 
 };
 struct Img {
@@ -143,13 +142,16 @@ struct Img {
 		//cv::imshow(name.c_str(), originalImg);
 		cv::imshow(name.c_str(), binaryFromBlue);
 	}
-	void showSegments(){
-		for (int i = 0; i < segments.size(); ++i){
-			char nr[30];
-			Segment s = segments.at(i);
-			sprintf(nr, "%d", s.index);
-			putText(segmented, nr, cv::Point(s.minCol, s.minRow), cv::FONT_HERSHEY_SIMPLEX, .4, cv::Scalar(255, 255, 255), 1, 8, false);
+	void showSegments(bool indexesVisible){
+		colorSegments();
+		if (indexesVisible){
+			for (int i = 0; i < segments.size(); ++i){
+				char nr[30];
+				Segment s = segments.at(i);
+				sprintf(nr, "%d", s.index);
+				putText(segmented, nr, cv::Point(s.minCol, s.minRow), cv::FONT_HERSHEY_SIMPLEX, .4, cv::Scalar(255, 255, 255), 1, 8, false);
 
+			}
 		}
 		cv::imshow(name.c_str(), segmented);
 	}
@@ -223,7 +225,17 @@ struct Img {
 			}
 		return change;
 	}
+	void indexSegments(){
+		bool segmentationDone = false;
+		while (!segmentationDone){
+			bool notFinished1 = topDownPass();
+			bool notFinished2 = bottomUpPass();
+			segmentationDone = !(notFinished1 || notFinished2);
+		}
+	}
 	void findSegments(){
+		labelPixels();
+		indexSegments();
 		//make a list of all unique segments' indexes
 		std::set<int> indexes;
 		for (int j = 0; j < cols; ++j)
@@ -715,17 +727,8 @@ int main(int, char *[]) {
 		erode(images[i].binaryFromBlue);
 		dilate7(images[i].binaryFromBlue, 7);
 		dilate3(images[i].binaryFromBlue, 3);
-		images[i].labelPixels();
-		bool segmentationDone = false;
-		while (!segmentationDone){
-			bool notFinished1 = images[i].topDownPass();
-			bool notFinished2 = images[i].bottomUpPass();
-			segmentationDone = !(notFinished1 || notFinished2);
-	    }
-		images[i].colorSegments();
 		images[i].findSegments();
-		images[i].showSegments();
-	//	images[i].show();
+		images[i].showSegments(false);
 	}
 
 	//images[0].show();
