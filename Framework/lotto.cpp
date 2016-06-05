@@ -3,6 +3,8 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <iostream>
 #include <string>
+#include <set>
+#include <vector>
 #include <math.h>
 #include <cmath>
 #include <time.h>
@@ -17,6 +19,7 @@
 #define V 2
 #define ABS(x) ((x>0)? x : -x)
 
+typedef std::vector<std::vector<uchar>> BinaryArray;
 const int n = 4;
 const int dilateSEsize = 7;
 const int erodeSEsize = 5;
@@ -82,6 +85,36 @@ cv::Mat originalImgs[n];
 cv::Mat source;
 char windowName[30] = "HSV vals";
 
+class Segment{
+public:
+	Segment(int index, int minRow, int minCol, int maxRow, int maxCol, int** labels){
+		this->index = index;
+		this->minRow = minRow;
+		this->minCol = minCol;
+		this->maxRow = maxRow;
+		this->maxCol = maxCol;
+		rows = maxRow - minRow + 1;
+		cols = maxCol - minCol + 1;
+		for (int i = 0; i < rows; ++i){
+			std::vector<uchar> rowVector;
+			binaryValues.push_back(rowVector);
+			for (int j = 0; j < cols; ++j){
+				int label = labels[i+minRow][j+minCol];
+				if (label != 0)
+					binaryValues[i].push_back(1);
+				else
+					binaryValues[i].push_back(0);
+			}
+		}
+	}
+	int minRow, minCol;
+	int maxRow, maxCol;
+	int index;
+	int rows, cols;
+	BinaryArray binaryValues;
+	//uchar ** binaryValues;
+
+};
 struct Img {
 	cv::Mat originalImg;
 	cv::Mat_<cv::Vec3b> binaryFromBlue;
@@ -89,7 +122,12 @@ struct Img {
 	int** labels;
 	std::string name;
 	int rows, cols;
-
+	std::vector<Segment> segments;
+	~Img(){
+		for (int j = 0; j < cols; ++j)
+			delete[] labels[j];
+		delete[] labels;
+	}
 	void init(std::string filename){
 		originalImg = cv::imread(filename.c_str());
 		name = filename;
@@ -100,15 +138,19 @@ struct Img {
 		labels = new int*[rows];
 		for (int j = 0; j < cols; ++j)
 			labels[j] = new int[cols];
-		
 	}
-
 	void show(){
 		//cv::imshow(name.c_str(), originalImg);
 		cv::imshow(name.c_str(), binaryFromBlue);
 	}
-
 	void showSegments(){
+		for (int i = 0; i < segments.size(); ++i){
+			char nr[30];
+			Segment s = segments.at(i);
+			sprintf(nr, "%d", s.index);
+			putText(segmented, nr, cv::Point(s.minCol, s.minRow), cv::FONT_HERSHEY_SIMPLEX, .4, cv::Scalar(255, 255, 255), 1, 8, false);
+
+		}
 		cv::imshow(name.c_str(), segmented);
 	}
 	void colorSegments(){
@@ -119,7 +161,6 @@ struct Img {
 			}
 		segmented = temp;
 	}
-
 	void labelPixels(){
 		int count = 1;
 		for (int i = 0; i < rows; ++i)
@@ -131,12 +172,11 @@ struct Img {
 
 			}
 	}
-
-	bool topDownPass(){
+	bool bottomUpPass(){
 		bool change = false;
 		int windowSize = 3;
-		for (int i = 1; i < rows - 1; ++i)
-			for (int j = 1; j < cols - 1; ++j){
+		for (int j = cols - 2; j > 0; --j)
+			for (int i = rows - 1; i > 0; --i){
 				if (labels[i][j] != 0){
 					int min = labels[i][j];
 					if (labels[i][j - 1] < min && labels[i][j - 1] > 0)
@@ -158,11 +198,10 @@ struct Img {
 			}
 		return change;
 	}
-	bool bottomUpPass(){
+	bool topDownPass(){
 		bool change = false;
-		int windowSize = 3;
-		for (int i = rows -1; i > 1; ++i)
-			for (int j = cols -1; j > 1; ++j){
+		for (int j = 1; j < cols - 1; ++j)
+			for (int i = 0; i < rows - 1; ++i){
 				if (labels[i][j] != 0){
 					int min = labels[i][j];
 					if (labels[i][j - 1] < min && labels[i][j - 1] > 0)
@@ -183,6 +222,35 @@ struct Img {
 				}
 			}
 		return change;
+	}
+	void findSegments(){
+		//make a list of all unique segments' indexes
+		std::set<int> indexes;
+		for (int j = 0; j < cols; ++j)
+			for (int i = 0; i < rows ; ++i)
+				if (labels[i][j] != 0)
+					indexes.insert(labels[i][j]);
+		
+		std::set<int>::iterator it;
+		for (it = indexes.begin(); it != indexes.end(); it++){
+			int maxRow = 0, maxCol = 0;
+			int minRow = 99999999, minCol = 9999999;
+			//find bounding box
+			for (int i = 0; i < rows; ++i)
+				for (int j = 0; j < cols; ++j)
+					if (labels[i][j] == *it){
+						if (i < minRow)
+							minRow = i;
+						if (i > maxRow)
+							maxRow = i;
+						if (j < minCol)
+							minCol = j;
+						if (j > maxCol)
+							maxCol = j;
+					}
+			Segment segment(*it, minRow, minCol, maxRow, maxCol, labels);
+			segments.push_back(segment);
+		}
 	}
 };
 
@@ -235,6 +303,13 @@ struct BoundingBox{
 	}
 };
 
+class MomentFinder{
+	int** labels;
+	MomentFinder(){
+	}
+	void setSource(int labels);
+
+};
 struct Shape {
 	BoundingBox box;
 	std::string name;
@@ -369,7 +444,6 @@ struct Shape {
 		tempImg(box.center.y, box.center.x)[2] = 180;
 		boundedImg = tempImg;
 	}
-
 	void calcPerimeter(){
 		cv::Mat_<cv::Vec3b> tempImg = img;
 		for (int i = 1; i < img.rows - 1; i++){
@@ -382,14 +456,12 @@ struct Shape {
 			}
 		}
 	}
-
 	void calcW3(){
 		calcArea();
 		calcPerimeter();
 		W3 = perim / 2 / sqrt(3.14*area) - 1;
 	}
 };
-
 void drawLine(cv::Mat img, Pixel p1, Pixel p2){
 	cv::Mat_<cv::Vec3b> tempImg = img;
 	for (int i = 0; i < img.rows; i++){
@@ -397,9 +469,7 @@ void drawLine(cv::Mat img, Pixel p1, Pixel p2){
 		}
 	}
 }
-
 struct Shape shapes[5];
-
 
 cv::Mat& perform(cv::Mat& I){
   CV_Assert(I.depth() != sizeof(uchar));
@@ -436,40 +506,6 @@ int thresh(int val){
 	if (val < 0)
 		return 0;
 }
-/*cv::Mat selectMax(cv::Mat& I){
-    CV_Assert(I.depth() != sizeof(uchar));
-	cv::Mat_<cv::Vec3b> _I = I;
-	int half = I.rows / 2;
-	for (int i = 0; i < I.rows; ++i){
-		for (int j = 0; j < I.cols; ++j){
-			if (i < half && j < half)
-				;//NOP
-			if (i >= half && j < half){
-				//Contrast
-				_I(i, j)[0] = thresh(_I(i, j)[0] * 1.5, 255);
-				_I(i, j)[1] = thresh(_I(i, j)[1] * 1.5, 255);
-				_I(i, j)[2] = thresh(_I(i, j)[2] * 1.5, 255);
-			}
-			if (i >= half && j >= half){
-				int r = _I(i, j)[2];
-				int g = _I(i, j)[1];
-				int b = _I(i, j)[0];
-				_I(i, j)[0] = thresh(r - (r + g + b) / 3);
-				_I(i, j)[1] = thresh(r - (r + g + b) / 3);
-				_I(i, j)[2] = thresh(r - (r + g + b) / 3);
-			}
-			if (i < half && j >= half){
-				//intensity
-				_I(i, j)[0] = thresh(_I(i, j)[0] + 50, 255);
-				_I(i, j)[1] = thresh(_I(i, j)[0] + 50, 255);
-				_I(i, j)[2] = thresh(_I(i, j)[0] + 50, 255);
-			}
-		}
-		I = _I;
-	}
-	return I;
-}*/
-
 static void onMouse(int event, int x, int y, int f, void*){
 	cv::Mat image = source.clone();
 	cv::Vec3b rgb = image.at<cv::Vec3b>(y, x);
@@ -514,15 +550,13 @@ static void onMouse(int event, int x, int y, int f, void*){
 	//imwrite("hsv.jpg",image);
 	imshow(windowName, image);
 }
+
+
 void loadImgs(){
 	images[0].init("lotto-man.jpg");
 	images[1].init("lotto-budka.jpeg");
 	images[2].init("lotto-twice.jpg");
 	images[3].init("not-Lotto.jpg"); 
-	/*originalImgs[1] = cv::imread("lotto-budka.jpeg");
-	originalImgs[0] = cv::imread("lotto-man.jpg");
-	originalImgs[2] = cv::imread("lotto-twice.jpg");
-	originalImgs[3] = cv::imread("not-Lotto.jpg");*/
 }
 
 cv::Mat thresholdHue(cv::Mat rgbSrc, int lowerThresh, int upperThresh){
@@ -637,36 +671,6 @@ void dilate7(cv::Mat & src, int size){
 	src = result;
 }
 
-/*
-void labelPixels(cv::Mat src){
-	int counter = 1;
-}
-
-void topDownPass(cv::Mat src){
-	cv::Mat_<cv::Vec3b> img = src;
-	cv::Mat_<int> objects(src.rows, src.cols, 0);
-	int id = 0;
-	int windowSize = 3;
-	for (int i = 1; i < src.rows-1; i++){
-		for (int j = 1; j < src.cols-1; j++){
-			fillWindow(i, j, img, 0, windowSize/2, windowSize);
-				bool matched = false;
-				for (int a = 0; a < windowSize; a++)
-					for (int b = 0; b < SEsize; b++)
-						if (window[a][b] == 255 && SE7[a][b] == 1){
-							int
-							matched = true;
-							break;
-						}
-				if (matched)
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
-				else
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			}
-		}
-	}
-
-}*/
 void erode(cv::Mat & src){
 	cv::Mat_<cv::Vec3b> img = src;
 	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
@@ -712,9 +716,14 @@ int main(int, char *[]) {
 		dilate7(images[i].binaryFromBlue, 7);
 		dilate3(images[i].binaryFromBlue, 3);
 		images[i].labelPixels();
-		images[i].topDownPass();
-		images[i].bottomUpPass();
+		bool segmentationDone = false;
+		while (!segmentationDone){
+			bool notFinished1 = images[i].topDownPass();
+			bool notFinished2 = images[i].bottomUpPass();
+			segmentationDone = !(notFinished1 || notFinished2);
+	    }
 		images[i].colorSegments();
+		images[i].findSegments();
 		images[i].showSegments();
 	//	images[i].show();
 	}
