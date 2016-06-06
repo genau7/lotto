@@ -10,6 +10,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "util.h"
 
 #define R 2
 #define G 1
@@ -85,30 +86,29 @@ cv::Mat originalImgs[n];
 cv::Mat source;
 char windowName[30] = "HSV vals";
 
-struct Pixel {
-	int x;
-	int y;
-};
+
 
 class MomentFinder{
 public:
 	BinaryArray* mask;
 	int rows, cols;
-	Pixel massCenter;
-	int area;
+	Pixel* massCenter;
+	float area;
 	MomentFinder(BinaryArray* mask, int rows, int cols){
 		this->mask = mask;
 		this->rows = rows;
 		this->cols = cols;
 	}
-	void calcArea(int* area){
+	void calcArea(float* area){
 		*area = m(0, 0);
 		this->area = *area;
 	}
 	void calcMassCenter(Pixel* massCenter){
-		this->massCenter.y = m(1, 0) / area; //row
-		this->massCenter.x = m(0, 1) / area; //col
-		massCenter = &(this->massCenter);
+		float y = m(1, 0) / area; //row
+		float x = m(0, 1) / area; //col
+		massCenter->y = (int)y;
+		massCenter->x = (int)x;
+		this->massCenter = massCenter;
 	}
 
 	float calcM7(){
@@ -129,7 +129,7 @@ public:
 		for (int i = 0; i < rows; i++)
 			for (int j = 0; j < cols; j++)
 				if (mask->at(i).at(j) != 0)
-					M += pow((i - massCenter.y), p)*pow((j - massCenter.x), q);
+					M += pow((i - massCenter->y), p)*pow((j - massCenter->x), q);
 		return M;
 	}
 
@@ -146,6 +146,7 @@ public:
 		this->labels = labels;
 		rows = maxRow - minRow + 1;
 		cols = maxCol - minCol + 1;
+		width2HeightRatio = cols * 1.0 / rows;
 		for (int i = 0; i < rows; ++i){
 			std::vector<uchar> rowVector;
 			mask.push_back(rowVector);
@@ -177,12 +178,49 @@ public:
     Pixel massCenter;
 	BinaryArray mask;
 	int **labels;
-	int area;
+	float area;
 	float radius;
 	float M7;
+	float width2HeightRatio;
 
 };
 
+struct SegmentPair{
+	Segment* s1;
+	Segment* s2;
+	float distance;
+	float areaRatio;
+	LinearFunction axis;
+	Pixel upperLeft;
+	Pixel bottomRight;
+	SegmentPair(Segment* first, Segment* second){
+		if (first->area > second->area){
+			s1 = first;
+			s2 = second;
+		}
+		else{
+			s1 = second;
+			s2 = first;
+		}
+		
+		float rowDistance = s1->massCenter.y - s2->massCenter.y;
+		float colDistance = s1->massCenter.x - s2->massCenter.x;
+		distance = sqrt(rowDistance*rowDistance + colDistance*colDistance);
+		areaRatio = (s2->area * 1.0 / s1->area);
+		axis.calcCoefficients(s1->massCenter, s2->massCenter);
+		upperLeft.x = (s1->minCol < s2->minCol) ? s1->minCol : s2->minCol;
+		upperLeft.y = (s1->minRow < s2->minRow) ? s1->minRow : s2->minRow;
+		bottomRight.x = (s1->maxCol > s2->maxCol) ? s1->maxCol : s2->maxCol;
+		bottomRight.y = (s1->maxRow > s2->maxRow) ? s1->maxRow : s2->maxRow;
+	}
+	bool pixelOnAxis(int row, int col){
+		return axis.onTheLine(row, col);
+	}
+	void drawCenters(cv::Mat_<uchar>& img){
+		img[s1->massCenter.y + s1->minRow][s1->massCenter.x + s1->minCol] = 255;
+		img[s2->massCenter.y + s2->minRow][s2->massCenter.x +s2->minCol] = 255;
+	}
+};
 struct Img {
 	cv::Mat originalImg;
 	cv::Mat_<cv::Vec3b> binaryFromBlue;
@@ -191,6 +229,7 @@ struct Img {
 	std::string name;
 	int rows, cols;
 	std::vector<Segment> segments;
+	std::vector<SegmentPair> segmentPairs;
 	~Img(){
 		for (int j = 0; j < cols; ++j)
 			delete[] labels[j];
@@ -225,7 +264,8 @@ struct Img {
 			char m7[30];
 			Segment s = segments.at(i);
 			//sprintf(m7, "%.3f", s.M7 * 1000);
-			sprintf(m7, "%d", s.area);
+			sprintf(m7, "%f", s.width2HeightRatio);
+			//sprintf(m7, "%d", s.area);
 			putText(segmented, m7, cv::Point(s.minCol, s.minRow), cv::FONT_HERSHEY_SIMPLEX, .4, cv::Scalar(255, 200, 255), 1, 8, false);
 		}
 		cv::imshow(name.c_str(), segmented);
@@ -233,7 +273,8 @@ struct Img {
 	void filterEllipses(){
 		for (int k = 0; k < segments.size();){
 			Segment s = segments.at(k);
-			if (s.M7 > 0.0071 || s.M7 < 0.00638){
+			if (s.M7 > 0.0071 || s.M7 < 0.00638 || s.width2HeightRatio < 0.68 ||
+			          s.width2HeightRatio > 1.063 || s.area < 150){
 				s.clear();
 				segments.erase(segments.begin() + k);
 			}
@@ -241,12 +282,43 @@ struct Img {
 				++k;
 		}
 	}
+
+	void findSegmentPairs(){
+		for (int a = 0; a < segments.size() - 1; ++a)
+			for (int b = a + 1; b < segments.size(); ++b){
+				SegmentPair pair(&segments.at(a), &segments.at(b));
+				if (pair.areaRatio > 0.52)
+					segmentPairs.push_back(pair);
+				float distanceCoeff = pair.distance * 2 / (pair.s1->cols + pair.s2->cols);
+				int temp = a;
+			}
+		
+	}
 	void colorSegments(){
 		cv::Mat_<uchar> temp = segmented;
 		for (int i = 0; i < rows; ++i)
 			for (int j = 0; j < cols; ++j) {
-				temp(i, j) = (labels[i][j] * 10) % 255;
+				temp(i, j) = (labels[i][j] == 0) ? 0 : 100;
+				//temp(i, j) = (labels[i][j] * 10) % 255;
 			}
+
+		//draw bounding box for each segment pair found
+		for (int k = 0; k < segmentPairs.size(); ++k){
+			SegmentPair pair = segmentPairs.at(k);
+			pair.drawCenters(temp);
+			for (int i = pair.upperLeft.y; i <= pair.bottomRight.y; ++i)
+				if (i == pair.upperLeft.y || i == pair.bottomRight.y)
+					for (int j = pair.upperLeft.x; j <= pair.bottomRight.x; ++j) 
+					//if (pair.pixelOnAxis(i, j))
+						temp[i][j] = 255;
+
+			for (int i = pair.upperLeft.y; i <= pair.bottomRight.y; ++i)
+				for (int j = pair.upperLeft.x; j <= pair.bottomRight.x; ++j)
+					if (j == pair.upperLeft.x || j == pair.bottomRight.y)
+						temp[i][j] = 255;
+			
+					
+		}
 		segmented = temp;
 	}
 	void labelPixels(){
@@ -356,9 +428,7 @@ struct Img {
 	}
 };
 
-
 Img images[n];
-
 
 struct BoundingBox{
 	Pixel upperLeft;
@@ -401,195 +471,14 @@ struct BoundingBox{
 		return tempImg;
 	}
 };
-
-
-struct Shape {
-	BoundingBox box;
-	std::string name;
-	cv::Mat img;
-	cv::Mat boundedImg;
-	int area;
-	int perim;
-	Pixel center;
-	float W3, M3, M7, m00;
-	float angleR;
-	float angle;
-
-	float m(int p, int q){
-		float m = 0;
-		cv::Mat_<cv::Vec3b> tempImg = boundedImg;
-		for (int i = 0; i < boundedImg.rows; i++)
-			for (int j = 0; j < boundedImg.cols; j++)
-				if (tempImg(i, j)[0] == 0)
-					m += pow(i, p)*pow(j, q);
-		return m;
-	}
-
-	void create(std::string name_in){
-		name = name_in;
-		img = cv::imread(name.c_str());
-		calcBoundingBox();
-		area = perim = 0;
-		W3 = M3 = M7  = 0.0;
-		m00 = m(0, 0);
-		center.y = m(1,0) / m00; // i
-		center.x = m(0,1) / m00; //j
-		//std::cout << "\nm00=" << m00 << ", m01=" << m(0, 1) << std::endl;
-	}
-	void create(cv::Mat img_in){
-		name = "";
-		img = img_in;
-		calcBoundingBox();
-		area = perim = 0;
-		W3 = M3 = M7 = 0.0;
-		m00 = m(0, 0);
-		center.y = m(1, 0) / m00; // i
-		center.x = m(0,1) / m00; //j
-	}
-	void calcAngle(){
-		float y = box.center.y - center.y;
-		float x = box.center.x - center.x;
-		float p = 0;
-
-		//sprawdz cwiartke
-		if (x < 0 && y >= 0) //II
-			p = 0.5;
-		else if (x <= 0 && y <= 0) //III
-			p = 1.0;
-		else if (x > 0 && y < 0) //IV
-			p = 1.5;
-		
-		if (y == 0 && p == 0.5)
-			p = 1.0;
-
-		if (x == 0)
-			angleR = 3.14/2;
-		else
-			angleR = fabs(y) / fabs(x);
-		angleR += p * 3.14;
-		angle = 180 * angleR / 3.14;
-	}
-	float N(int p, int q){
-		return M(p, q) / pow(m(0, 0), (p + q) / 2 + 1);
-	}
-
-	float M(int p, int q){
-		float M = 0;
-		cv::Mat_<cv::Vec3b> tempImg = boundedImg;
-		for (int i = 0; i < boundedImg.rows; i++)
-			for (int j = 0; j < boundedImg.cols; j++)
-				if (tempImg(i, j)[0] == 0)
-					M += pow((i - center.y), p)*pow((j - center.x), q);
-		return M;
-
-	}
-	void calcM3(){	
-		//std::cout << std::endl << N(3, 0) << ", " << N(1, 2) << "," << N(2, 1) << ", " << N(0, 3) << std::endl;
-		M3 = pow((N(3,0) - 3 * N(1,2)),2) + pow(3 * N(2,1) - N(0,3),2);
-	}
-
-	void calcM7(){
-		M7 = N(2, 0)*N(0, 2) - pow(N(1, 1), 2);
-	}
-
-	void print(){
-		std::cout << name << ":\n" << "\tperimeter=" << perim << "\tarea=" << area <<"\tW3="<<W3<<"\tM3="<<M3<< "\tM7="<<M7<<std::endl;
-	}
-	void calcBoundingBox(){
-		cv::Mat_<cv::Vec3b> tempImg = img;
-		box.upperLeft.x = img.cols;
-		box.upperLeft.y = img.rows;
-		for (int i = 0; i < img.rows; i++){
-			for (int j = 0; j < img.cols; j++){
-				if (tempImg(i, j)[0] == 0){
-					if (j < box.upperLeft.x)
-						box.upperLeft.x = j;
-					if (i < box.upperLeft.y)
-						box.upperLeft.y = i;
-					if (j > box.lowerRight.x)
-						box.lowerRight.x = j;
-					if (i > box.lowerRight.y)
-						box.lowerRight.y = i;
-				}
-			}
-		}
-		//img = box.draw(img);	
-		
-		box.calcCenter();
-		m00 = m(0, 0);
-		center.y = m(0, 1) / m00; // i
-		center.x = m(1, 0) / m00; //j
-
-		boundedImg = img(cv::Rect(box.upperLeft.x, box.upperLeft.y, box.lowerRight.x - box.upperLeft.x, box.lowerRight.y - box.upperLeft.y));
-	}
-	void calcArea(){
-		cv::Mat_<cv::Vec3b> tempImg = boundedImg;
-		for (int i = 0; i < boundedImg.rows; i++)
-			for (int j = 0; j < boundedImg.cols; j++)
-				if (tempImg(i, j)[0] == 0)
-					area += 1;
-	}
-	void drawCenters(){
+	/*void drawCenters(){
 		cv::Mat_<cv::Vec3b> tempImg = boundedImg;
 		tempImg(center.y, center.x)[1] = 255;
 		tempImg(box.center.y, box.center.x)[2] = 180;
 		boundedImg = tempImg;
-	}
-	void calcPerimeter(){
-		cv::Mat_<cv::Vec3b> tempImg = img;
-		for (int i = 1; i < img.rows - 1; i++){
-			for (int j = 1; j < img.cols - 1; j++){
-				if (tempImg(i, j)[0] == 0)
-					if (tempImg(i - 1, j - 1)[0] != 0 || tempImg(i - 1, j)[0] != 0 || tempImg(i - 1, j + 1)[0] != 0 ||
-						tempImg(i, j - 1)[0] != 0 || tempImg(i, j)[0] != 0 || tempImg(i, j + 1)[0] != 0 ||
-						tempImg(i + 1, j - 1)[0] != 0 || tempImg(i + 1, j)[0] != 0 || tempImg(i + 1, j + 1)[0] != 0)
-						perim += 1;
-			}
-		}
-	}
-	void calcW3(){
-		calcArea();
-		calcPerimeter();
-		W3 = perim / 2 / sqrt(3.14*area) - 1;
-	}
-};
-struct Shape shapes[5];
+	}*/
+	
 
-cv::Mat& perform(cv::Mat& I){
-  CV_Assert(I.depth() != sizeof(uchar));
-  cv::Mat_<cv::Vec3b> _I = I;
-  int half = I.rows / 2;
-  for (int i = 0; i < I.rows; ++i){
-	  for (int j = 0; j < I.cols; ++j){
-		  if (i < half && j < half)
-			  ;//NOP
-		  if (i >= half && j < half)
-			  _I(i, j)[0] = 0, _I(i, j)[1] = 0;//Contrast
-		  if (i >= half && j >= half)
-			  _I(i, j)[1] = 0, _I(i, j)[2] = 0;; ///R 
-		  if (i < half && j >= half)
-			  _I(i, j)[0] = 0, _I(i, j)[2] = 0;;// intensity +50	
-	  }
-	  I = _I;
-  }
-  return I;
-}
-
-int thresh(int val, int thresh){
-	if (val > thresh)
-		return thresh;
-	return val;
-}
-
-int thresh(int val){
-	/*if (val < 0)
-		return val;
-	return val;*/
-	if (val > 255)
-		return 255;
-	if (val < 0)
-		return 0;
-}
 static void onMouse(int event, int x, int y, int f, void*){
 	cv::Mat image = source.clone();
 	cv::Vec3b rgb = image.at<cv::Vec3b>(y, x);
@@ -802,6 +691,7 @@ int main(int, char *[]) {
 		images[i].findSegments();
 		images[i].calcSegmentsParams();
 		images[i].filterEllipses();
+		images[i].findSegmentPairs();
 		images[i].showSegments();
 	}
 
