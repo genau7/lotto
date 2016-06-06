@@ -85,6 +85,56 @@ cv::Mat originalImgs[n];
 cv::Mat source;
 char windowName[30] = "HSV vals";
 
+struct Pixel {
+	int x;
+	int y;
+};
+
+class MomentFinder{
+public:
+	BinaryArray* mask;
+	int rows, cols;
+	Pixel massCenter;
+	int area;
+	MomentFinder(BinaryArray* mask, int rows, int cols){
+		this->mask = mask;
+		this->rows = rows;
+		this->cols = cols;
+	}
+	void calcArea(int* area){
+		*area = m(0, 0);
+		this->area = *area;
+	}
+	void calcMassCenter(Pixel* massCenter){
+		this->massCenter.y = m(1, 0) / area; //row
+		this->massCenter.x = m(0, 1) / area; //col
+		massCenter = &(this->massCenter);
+	}
+
+	float calcM7(){
+		return (M(2, 0)*M(0, 2) - pow(M(1, 1), 2)) / (pow(area, 4));
+	}
+
+	float m(int p, int q){
+		float m = 0;
+		for (int i = 0; i < rows; i++)
+			for (int j = 0; j < cols; j++)
+				if (mask->at(i).at(j) != 0)
+					m += pow(i, p)*pow(j, q);
+		return m;
+	}
+
+	float M(int p, int q){
+		float M = 0;
+		for (int i = 0; i < rows; i++)
+			for (int j = 0; j < cols; j++)
+				if (mask->at(i).at(j) != 0)
+					M += pow((i - massCenter.y), p)*pow((j - massCenter.x), q);
+		return M;
+	}
+
+};
+
 class Segment{
 public:
 	Segment(int index, int minRow, int minCol, int maxRow, int maxCol, int** labels){
@@ -93,27 +143,46 @@ public:
 		this->minCol = minCol;
 		this->maxRow = maxRow;
 		this->maxCol = maxCol;
+		this->labels = labels;
 		rows = maxRow - minRow + 1;
 		cols = maxCol - minCol + 1;
 		for (int i = 0; i < rows; ++i){
 			std::vector<uchar> rowVector;
-			binaryValues.push_back(rowVector);
+			mask.push_back(rowVector);
 			for (int j = 0; j < cols; ++j){
 				int label = labels[i+minRow][j+minCol];
 				if (label != 0)
-					binaryValues[i].push_back(1);
+					mask[i].push_back(1);
 				else
-					binaryValues[i].push_back(0);
+					mask[i].push_back(0);
 			}
 		}
+	}
+	void calcParams(){
+		MomentFinder momentFinder(&mask, rows, cols);
+		momentFinder.calcArea(&area);
+		momentFinder.calcMassCenter(&massCenter);
+		M7 = momentFinder.calcM7();
+	}
+	void clear(){
+		for (int i = minRow; i <= maxRow; ++i)
+			for (int j = minCol; j <= maxCol; ++j){
+				labels[i][j] = 0;
+			}
 	}
 	int minRow, minCol;
 	int maxRow, maxCol;
 	int index;
 	int rows, cols;
-	BinaryArray binaryValues;
+    Pixel massCenter;
+	BinaryArray mask;
+	int **labels;
+	int area;
+	float radius;
+	float M7;
 
 };
+
 struct Img {
 	cv::Mat originalImg;
 	cv::Mat_<cv::Vec3b> binaryFromBlue;
@@ -142,7 +211,7 @@ struct Img {
 		//cv::imshow(name.c_str(), originalImg);
 		cv::imshow(name.c_str(), binaryFromBlue);
 	}
-	void showSegments(bool indexesVisible){
+	void showSegments(bool indexesVisible = false){
 		colorSegments();
 		if (indexesVisible){
 			for (int i = 0; i < segments.size(); ++i){
@@ -150,10 +219,27 @@ struct Img {
 				Segment s = segments.at(i);
 				sprintf(nr, "%d", s.index);
 				putText(segmented, nr, cv::Point(s.minCol, s.minRow), cv::FONT_HERSHEY_SIMPLEX, .4, cv::Scalar(255, 255, 255), 1, 8, false);
-
 			}
 		}
+		for (int i = 0; i < segments.size(); ++i){
+			char m7[30];
+			Segment s = segments.at(i);
+			//sprintf(m7, "%.3f", s.M7 * 1000);
+			sprintf(m7, "%d", s.area);
+			putText(segmented, m7, cv::Point(s.minCol, s.minRow), cv::FONT_HERSHEY_SIMPLEX, .4, cv::Scalar(255, 200, 255), 1, 8, false);
+		}
 		cv::imshow(name.c_str(), segmented);
+	}
+	void filterEllipses(){
+		for (int k = 0; k < segments.size();){
+			Segment s = segments.at(k);
+			if (s.M7 > 0.0071 || s.M7 < 0.00638){
+				s.clear();
+				segments.erase(segments.begin() + k);
+			}
+			else
+				++k;
+		}
 	}
 	void colorSegments(){
 		cv::Mat_<uchar> temp = segmented;
@@ -264,15 +350,16 @@ struct Img {
 			segments.push_back(segment);
 		}
 	}
+	void calcSegmentsParams(){
+		for (int k = 0; k < segments.size(); ++k)
+			segments.at(k).calcParams();
+	}
 };
 
 
 Img images[n];
 
-struct Pixel {
-	int x;
-	int y;
-};
+
 struct BoundingBox{
 	Pixel upperLeft;
 	Pixel lowerRight;
@@ -315,13 +402,7 @@ struct BoundingBox{
 	}
 };
 
-class MomentFinder{
-	int** labels;
-	MomentFinder(){
-	}
-	void setSource(int labels);
 
-};
 struct Shape {
 	BoundingBox box;
 	std::string name;
@@ -355,7 +436,6 @@ struct Shape {
 		center.x = m(0,1) / m00; //j
 		//std::cout << "\nm00=" << m00 << ", m01=" << m(0, 1) << std::endl;
 	}
-
 	void create(cv::Mat img_in){
 		name = "";
 		img = img_in;
@@ -366,7 +446,6 @@ struct Shape {
 		center.y = m(1, 0) / m00; // i
 		center.x = m(0,1) / m00; //j
 	}
-
 	void calcAngle(){
 		float y = box.center.y - center.y;
 		float x = box.center.x - center.x;
@@ -474,13 +553,6 @@ struct Shape {
 		W3 = perim / 2 / sqrt(3.14*area) - 1;
 	}
 };
-void drawLine(cv::Mat img, Pixel p1, Pixel p2){
-	cv::Mat_<cv::Vec3b> tempImg = img;
-	for (int i = 0; i < img.rows; i++){
-		for (int j = 0; j < img.cols; j++){
-		}
-	}
-}
 struct Shape shapes[5];
 
 cv::Mat& perform(cv::Mat& I){
@@ -728,7 +800,9 @@ int main(int, char *[]) {
 		dilate7(images[i].binaryFromBlue, 7);
 		dilate3(images[i].binaryFromBlue, 3);
 		images[i].findSegments();
-		images[i].showSegments(false);
+		images[i].calcSegmentsParams();
+		images[i].filterEllipses();
+		images[i].showSegments();
 	}
 
 	//images[0].show();
