@@ -4,6 +4,8 @@
 struct Pixel {
 	int x;
 	int y;
+	Pixel(){}
+	Pixel(int x, int y) : x(x), y(y) {}
 
 };
 
@@ -21,6 +23,7 @@ struct LinearFunction{
 		else
 			a = b = 0;
 	}
+
 
 	float a;
 	float b;

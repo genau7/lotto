@@ -104,7 +104,7 @@ public:
 		this->area = *area;
 	}
 	void calcMassCenter(Pixel* massCenter){
-		float y = m(1, 0) / area; //row
+		float y = m(1, 0) / area ; //row
 		float x = m(0, 1) / area; //col
 		massCenter->y = (int)y;
 		massCenter->x = (int)x;
@@ -193,6 +193,9 @@ struct SegmentPair{
 	LinearFunction axis;
 	Pixel upperLeft;
 	Pixel bottomRight;
+	float axisAngle;
+	bool isHorizontal;
+	float averageR;
 	SegmentPair(Segment* first, Segment* second){
 		if (first->area > second->area){
 			s1 = first;
@@ -202,21 +205,31 @@ struct SegmentPair{
 			s1 = second;
 			s2 = first;
 		}
-		
-		float rowDistance = s1->massCenter.y - s2->massCenter.y;
-		float colDistance = s1->massCenter.x - s2->massCenter.x;
+		Pixel center1(s1->massCenter.x + s1->minCol, s1->massCenter.y + s1->minRow);
+		Pixel center2(s2->massCenter.x + s2->minCol, s2->massCenter.y + s2->minRow);
+		//float rowDistance = s1->massCenter.y + s1->minRow - s2->massCenter.y - s2->minRow;
+		//float colDistance = s1->massCenter.x + s1->minCol - s2->massCenter.x - s2->minCol;
+		float rowDistance = center1.y - center2.y;
+		float colDistance = center1.x - center2.x;
 		distance = sqrt(rowDistance*rowDistance + colDistance*colDistance);
 		areaRatio = (s2->area * 1.0 / s1->area);
-		axis.calcCoefficients(s1->massCenter, s2->massCenter);
+		//axis.calcCoefficients(s1->massCenter, s2->massCenter);
+		axis.calcCoefficients(center1, center2);
 		upperLeft.x = (s1->minCol < s2->minCol) ? s1->minCol : s2->minCol;
 		upperLeft.y = (s1->minRow < s2->minRow) ? s1->minRow : s2->minRow;
 		bottomRight.x = (s1->maxCol > s2->maxCol) ? s1->maxCol : s2->maxCol;
 		bottomRight.y = (s1->maxRow > s2->maxRow) ? s1->maxRow : s2->maxRow;
+		axisAngle = 180.0 / 3.14 * fabs(axis.a);
+		isHorizontal = ((int)axisAngle / 45 == 0) ? true: false;
+		averageR = (s1->cols + s2->cols) * 1.0 / 2;
+
 	}
 	bool pixelOnAxis(int row, int col){
 		return axis.onTheLine(row, col);
 	}
 	void drawCenters(cv::Mat_<uchar>& img){
+		Pixel a = s1->massCenter;
+		Pixel b = s2->massCenter;
 		img[s1->massCenter.y + s1->minRow][s1->massCenter.x + s1->minCol] = 255;
 		img[s2->massCenter.y + s2->minRow][s2->massCenter.x +s2->minCol] = 255;
 	}
@@ -283,16 +296,16 @@ struct Img {
 		}
 	}
 
-	void findSegmentPairs(){
+	bool findSegmentPairs(){
 		for (int a = 0; a < segments.size() - 1; ++a)
 			for (int b = a + 1; b < segments.size(); ++b){
 				SegmentPair pair(&segments.at(a), &segments.at(b));
-				if (pair.areaRatio > 0.52)
-					segmentPairs.push_back(pair);
-				float distanceCoeff = pair.distance * 2 / (pair.s1->cols + pair.s2->cols);
-				int temp = a;
+				float distanceCoeff = pair.distance / pair.averageR;
+				if (pair.areaRatio > 0.52  && (distanceCoeff >2.3 && distanceCoeff < 2.5)){
+					segmentPairs.push_back(pair);				
+				}
 			}
-		
+		return (segmentPairs.size() > 0);
 	}
 	void colorSegments(){
 		cv::Mat_<uchar> temp = segmented;
