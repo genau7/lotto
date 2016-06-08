@@ -160,6 +160,9 @@
     <ClCompile Include="util.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="MomentFinder.h" />
+    <ClInclude Include="segment.h" />
+    <ClInclude Include="segmentFinder.h" />
     <ClInclude Include="util.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -1,6 +1,28 @@
 #ifndef UTIL_H
 #define UTIL_H
 
+#include "opencv2/core/core.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include <opencv2/imgproc/imgproc.hpp>
+#include <iostream>
+#include <string>
+#include <set>
+#include <vector>
+#include <math.h>
+#include <cmath>
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define R 2
+#define G 1
+#define B 0
+#define H 0
+#define S 1
+#define V 2
+
+
+typedef std::vector<std::vector<uchar>> BinaryArray;
 struct Pixel {
 	int x;
 	int y;
@@ -15,23 +37,13 @@ inline bool operator!=(const Pixel& lhs, const Pixel& rhs){
 
 
 struct LinearFunction{
-	void calcCoefficients(Pixel p1, Pixel p2){
-		if (p1 != p2){
-			a = 1.0 *(p1.y - p2.y) / (p1.x - p2.x);
-			b = 1.0 * p2.y - a * p2.x;
-		}
-		else
-			a = b = 0;
-	}
-
-
 	float a;
 	float b;
-	bool onTheLine(int row, int col){
-		int y = a*col + b;
-		if (y == row)
-			return true;
-		return false;
-	}
+	void calcCoefficients(Pixel p1, Pixel p2);
+	bool onTheLine(int row, int col);
 };
+
+cv::Mat thresholdHue(cv::Mat rgbSrc, int lowerThresh, int upperThresh);
+cv::Mat thresholdValue(cv::Mat rgbSrc, int lowerThresh, int upperThresh);
+
 #endif //UTIL_H

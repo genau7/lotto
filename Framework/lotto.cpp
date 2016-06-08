@@ -1,26 +1,8 @@
-#include "opencv2/core/core.hpp"
-#include "opencv2/highgui/highgui.hpp"
-#include <opencv2/imgproc/imgproc.hpp>
-#include <iostream>
-#include <string>
-#include <set>
-#include <vector>
-#include <math.h>
-#include <cmath>
-#include <time.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include "util.h"
+#include "segmentFinder.h"
 
-#define R 2
-#define G 1
-#define B 0
-#define H 0
-#define S 1
-#define V 2
-#define ABS(x) ((x>0)? x : -x)
 
-typedef std::vector<std::vector<uchar>> BinaryArray;
+
+
 const int n = 4;
 const int dilateSEsize = 7;
 const int erodeSEsize = 5;
@@ -34,29 +16,7 @@ const int SE7[7][7] =
 	{ 0, 1, 1, 1, 1, 1, 0 },
 	{ 0, 0, 1, 1, 1, 0, 0 }
 };
-/*/
-const int dilateSE[dilateSEsize][dilateSEsize] =
-{
-{ 0, 1, 1, 1, 0 },
-{ 1, 1, 1, 1, 1 },
-{ 1, 1, 1, 1, 1 },
-{ 1, 1, 1, 1, 1,},
-{ 0, 1, 1, 1, 0 }
-};
 
-/*
-const int SE3[3][3] =
-{
-	{ 0, 1, 0 },
-	{ 1, 1, 1 },
-	{ 0, 1, 0 }
-};
-/*const int SE3[3][3] =
-{
-	{ 1, 1, 1 },
-	{ 1, 1, 1 },
-	{ 1, 1, 1 }
-};*/
 const int SE3[3][3] =
 {
 	{ 0, 1, 0 },
@@ -87,103 +47,130 @@ cv::Mat source;
 char windowName[30] = "HSV vals";
 
 
+void fillWindow(int i, int j, cv::Mat_<cv::Vec3b> img, int channel, int margin, int SEsize){
+	/*window[0][0] = I(i-1, j-1)[channel];
+	window[0][1] = I(i - 1, j)[channel];
+	window[0][2] = I(i - 1, j + 1)[channel];
+	window[1][0] = I(i, j - 1)[channel];
+	window[1][1] = I(i, j)[channel];
+	window[1][2] = I(i, j + 1)[channel];
+	window[2][0] = I(i + 1, j - 1)[channel];
+	window[2][1] = I(i + 1, j)[channel];
+	window[2][2] = I(i + 1, j + 1)[channel];*/
+	for (int a = 0; a < SEsize; a++)
+		for (int b = 0; b < SEsize; b++)
+			window[a][b] = img(i + a - margin, j + b - margin)[channel];
+}
 
-class MomentFinder{
-public:
-	BinaryArray* mask;
-	int rows, cols;
-	Pixel* massCenter;
-	float area;
-	MomentFinder(BinaryArray* mask, int rows, int cols){
-		this->mask = mask;
-		this->rows = rows;
-		this->cols = cols;
-	}
-	void calcArea(float* area){
-		*area = m(0, 0);
-		this->area = *area;
-	}
-	void calcMassCenter(Pixel* massCenter){
-		float y = m(1, 0) / area ; //row
-		float x = m(0, 1) / area; //col
-		massCenter->y = (int)y;
-		massCenter->x = (int)x;
-		this->massCenter = massCenter;
-	}
-
-	float calcM7(){
-		return (M(2, 0)*M(0, 2) - pow(M(1, 1), 2)) / (pow(area, 4));
-	}
-
-	float m(int p, int q){
-		float m = 0;
-		for (int i = 0; i < rows; i++)
-			for (int j = 0; j < cols; j++)
-				if (mask->at(i).at(j) != 0)
-					m += pow(i, p)*pow(j, q);
-		return m;
-	}
-
-	float M(int p, int q){
-		float M = 0;
-		for (int i = 0; i < rows; i++)
-			for (int j = 0; j < cols; j++)
-				if (mask->at(i).at(j) != 0)
-					M += pow((i - massCenter->y), p)*pow((j - massCenter->x), q);
-		return M;
-	}
-
-};
-
-class Segment{
-public:
-	Segment(int index, int minRow, int minCol, int maxRow, int maxCol, int** labels){
-		this->index = index;
-		this->minRow = minRow;
-		this->minCol = minCol;
-		this->maxRow = maxRow;
-		this->maxCol = maxCol;
-		this->labels = labels;
-		rows = maxRow - minRow + 1;
-		cols = maxCol - minCol + 1;
-		width2HeightRatio = cols * 1.0 / rows;
-		for (int i = 0; i < rows; ++i){
-			std::vector<uchar> rowVector;
-			mask.push_back(rowVector);
-			for (int j = 0; j < cols; ++j){
-				int label = labels[i+minRow][j+minCol];
-				if (label != 0)
-					mask[i].push_back(1);
+void dilate3(cv::Mat & src, int size){
+	cv::Mat_<cv::Vec3b> img = src;
+	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
+	int margin = size / 2;
+	for (int i = 0; i < src.rows; i++){
+		for (int j = 0; j < src.cols; j++){
+			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
+				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
+			else {
+				fillWindow(i, j, img, 0, margin, size);
+				bool matched = false;
+				for (int a = 0; a < size; a++)
+					for (int b = 0; b < size; b++)
+						if (window[a][b] == 255 && SE3[a][b] == 1){
+							matched = true;
+							break;
+						}
+				if (matched)
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
 				else
-					mask[i].push_back(0);
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
 			}
 		}
 	}
-	void calcParams(){
-		MomentFinder momentFinder(&mask, rows, cols);
-		momentFinder.calcArea(&area);
-		momentFinder.calcMassCenter(&massCenter);
-		M7 = momentFinder.calcM7();
-	}
-	void clear(){
-		for (int i = minRow; i <= maxRow; ++i)
-			for (int j = minCol; j <= maxCol; ++j){
-				labels[i][j] = 0;
+	src = result;
+}
+void dilate5(cv::Mat & src, int size){
+	cv::Mat_<cv::Vec3b> img = src;
+	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
+	int margin = size / 2;
+	for (int i = 0; i < src.rows; i++){
+		for (int j = 0; j < src.cols; j++){
+			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
+				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
+			else {
+				fillWindow(i, j, img, 0, margin, size);
+				bool matched = false;
+				for (int a = 0; a < size; a++)
+					for (int b = 0; b < size; b++)
+						if (window[a][b] == 255 && SE5[a][b] == 1){
+							matched = true;
+							break;
+						}
+				if (matched)
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
+				else
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
 			}
+		}
 	}
-	int minRow, minCol;
-	int maxRow, maxCol;
-	int index;
-	int rows, cols;
-    Pixel massCenter;
-	BinaryArray mask;
-	int **labels;
-	float area;
-	float radius;
-	float M7;
-	float width2HeightRatio;
+	src = result;
+}
 
-};
+void dilate7(cv::Mat & src, int size){
+	cv::Mat_<cv::Vec3b> img = src;
+	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
+	int margin = size / 2;
+	for (int i = 0; i < src.rows; i++){
+		for (int j = 0; j < src.cols; j++){
+			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
+				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
+			else {
+				fillWindow(i, j, img, 0, margin, size);
+				bool matched = false;
+				for (int a = 0; a < size; a++)
+					for (int b = 0; b < size; b++)
+						if (window[a][b] == 255 && SE7[a][b] == 1){
+							matched = true;
+							break;
+						}
+				if (matched)
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
+				else
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
+			}
+		}
+	}
+	src = result;
+}
+
+void erode(cv::Mat & src){
+	cv::Mat_<cv::Vec3b> img = src;
+	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
+	int margin = erodeSEsize / 2;
+	for (int i = 0; i < src.rows; i++){
+		for (int j = 0; j < src.cols; j++){
+			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
+				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
+			else {
+				fillWindow(i, j, img, 0, margin, erodeSEsize);
+				bool matched = true;
+				for (int a = 0; a < erodeSEsize; a++)
+					for (int b = 0; b < erodeSEsize; b++)
+						if (window[a][b] != 255 && SE5[a][b] == 1){
+							matched = false;
+							break;
+						}
+				if (matched)
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
+				else
+					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 0;
+			}
+		}
+	}
+	src = result;
+}
+
+
+
 
 struct SegmentPair{
 	Segment* s1;
@@ -236,12 +223,12 @@ struct SegmentPair{
 		float upperLeftDec, bottomRightInc;
 		float dxUpperLeft, dyUpperLeft, dxBottomRight, dyBottomRight;
 		if (s1->minRow <= s2->minRow){
-			upperLeftDec = -0.6 * sqrt(s1->cols * s1->cols + s1->rows * s1->rows);
-			bottomRightInc = 0.6 * sqrt(s2->cols * s2->cols + s2->rows * s2->rows);
+			upperLeftDec = -0.5 * sqrt(s1->cols * s1->cols + s1->rows * s1->rows);
+			bottomRightInc = 0.5 * sqrt(s2->cols * s2->cols + s2->rows * s2->rows);
 		}
 		else{
-			upperLeftDec = -0.6 * sqrt(s2->cols * s2->cols + s2->rows * s2->rows);
-			bottomRightInc = 0.6 * sqrt(s1->cols * s1->cols + s1->rows * s1->rows);
+			upperLeftDec = -0.5 * sqrt(s2->cols * s2->cols + s2->rows * s2->rows);
+			bottomRightInc = 0.5 * sqrt(s1->cols * s1->cols + s1->rows * s1->rows);
 		}
 		dxUpperLeft = upperLeftDec / sqrt(axis.a*axis.a + 1);
 		dyUpperLeft = axis.a * dxUpperLeft;
@@ -253,6 +240,9 @@ struct SegmentPair{
 		bottomRight.y = (bottomRight.y + dyBottomRight >= 0) ? bottomRight.y + dyBottomRight : 0;
 	}
 };
+
+typedef std::vector<std::vector<SegmentPair>> LottoWritings;
+
 struct Img {
 	cv::Mat originalImg;
 	cv::Mat_<cv::Vec3b> binaryFromBlue;
@@ -262,14 +252,20 @@ struct Img {
 	int rows, cols;
 	std::vector<Segment> segments;
 	std::vector<SegmentPair> segmentPairs;
-	~Img(){
-		for (int j = 0; j < cols; ++j)
-			delete[] labels[j];
-		delete[] labels;
-	}
+
 	void init(std::string filename){
 		originalImg = cv::imread(filename.c_str());
 		name = filename;
+		setup();
+	}
+
+	void init(cv::Mat img_in, std::string filename = ""){
+		name = filename;
+		originalImg = img_in;
+		setup();
+	}
+
+	void setup(){
 		rows = originalImg.rows;
 		cols = originalImg.cols;
 		cv::Mat temp(originalImg.size(), CV_8U);
@@ -469,6 +465,30 @@ struct Img {
 		for (int k = 0; k < segments.size(); ++k)
 			segments.at(k).calcParams();
 	}
+
+	void findLottoInSegmentsPairs(){
+		binaryFromBlue.release();
+		segmented.release();
+		for (int k = 0; k < segmentPairs.size(); ++k){
+			cv::Mat temp;
+			char pairName[30];
+			sprintf(pairName, "%s_Lotto%d", name.c_str(), k);
+			originalImg.copyTo(temp);
+			SegmentPair pair = segmentPairs.at(k);
+			cv::Rect ROI(pair.upperLeft.x, pair.upperLeft.y, pair.bottomRight.x - pair.upperLeft.x, pair.bottomRight.y - pair.upperLeft.y);
+			cv::Mat boundedMat = temp(ROI);
+			//Img boundedImg;
+		//	boundedImg.init(boundedMat, pairName);
+			cv::Mat_<cv::Vec3b> justBlack = thresholdValue(boundedMat, 0, 65);
+			dilate3(justBlack, 3);
+			erode(justBlack);
+			//erode(justBlack);
+			//dilate7(justBlack, 7);
+			dilate3(justBlack, 3);
+			cv::imshow(pairName, justBlack);
+
+		}
+	}
 };
 
 Img images[n];
@@ -575,149 +595,16 @@ void loadImgs(){
 	images[3].init("not-Lotto.jpg"); 
 }
 
-cv::Mat thresholdHue(cv::Mat rgbSrc, int lowerThresh, int upperThresh){
-	cv::Mat HSV;
-	cv::cvtColor(rgbSrc, HSV, CV_BGR2HSV);
-	cv::Mat_<cv::Vec3b> result = HSV;
-	for (int i = 0; i < HSV.rows; i++){
-		for (int j = 0; j < HSV.cols; j++){
-			if (result(i, j)[H] < lowerThresh || result(i, j)[H] > upperThresh)
-				result(i, j)[H] = 0;
-			else
-				result(i, j)[H] = 255;
-			result(i, j)[S] = result(i, j)[V] = result(i, j)[H];
-		}
-	}
-	return result;
-}
 
 
-void fillWindow(int i, int j, cv::Mat_<cv::Vec3b> img, int channel, int margin, int SEsize){
-	/*window[0][0] = I(i-1, j-1)[channel];
-	window[0][1] = I(i - 1, j)[channel];
-	window[0][2] = I(i - 1, j + 1)[channel];
-	window[1][0] = I(i, j - 1)[channel];
-	window[1][1] = I(i, j)[channel];
-	window[1][2] = I(i, j + 1)[channel];
-	window[2][0] = I(i + 1, j - 1)[channel];
-	window[2][1] = I(i + 1, j)[channel];
-	window[2][2] = I(i + 1, j + 1)[channel];*/
-	for (int a = 0; a < SEsize; a++)
-		for (int b = 0; b < SEsize; b++)
-			window[a][b] = img(i + a - margin, j + b - margin)[channel];
-}
 
-void dilate3(cv::Mat & src, int size){
-	cv::Mat_<cv::Vec3b> img = src;
-	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
-	int margin = size / 2;
-	for (int i = 0; i < src.rows; i++){
-		for (int j = 0; j < src.cols; j++){
-			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
-				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			else {
-				fillWindow(i, j, img, 0, margin, size);
-				bool matched = false;
-				for (int a = 0; a < size; a++)
-					for (int b = 0; b < size; b++)
-						if (window[a][b] == 255 && SE3[a][b] == 1){
-							matched = true;
-							break;
-						}
-				if (matched)
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
-				else
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			}
-		}
-	}
-	src = result;
-}
-void dilate5(cv::Mat & src, int size){
-	cv::Mat_<cv::Vec3b> img = src;
-	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
-	int margin = size / 2;
-	for (int i = 0; i < src.rows; i++){
-		for (int j = 0; j < src.cols; j++){
-			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
-				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			else {
-				fillWindow(i, j, img, 0, margin, size);
-				bool matched = false;
-				for (int a = 0; a < size; a++)
-					for (int b = 0; b < size; b++)
-						if (window[a][b] == 255 && SE5[a][b] == 1){
-							matched = true;
-							break;
-						}
-				if (matched)
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
-				else
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			}
-		}
-	}
-	src = result;
-}
 
-void dilate7(cv::Mat & src, int size){
-	cv::Mat_<cv::Vec3b> img = src;
-	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
-	int margin = size / 2;
-	for (int i = 0; i < src.rows; i++){
-		for (int j = 0; j < src.cols; j++){
-			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
-				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			else {
-				fillWindow(i, j, img, 0, margin, size);
-				bool matched = false;
-				for (int a = 0; a < size; a++)
-					for (int b = 0; b < size; b++)
-						if (window[a][b] == 255 && SE7[a][b] == 1){
-							matched = true;
-							break;
-						}
-				if (matched)
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
-				else
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			}
-		}
-	}
-	src = result;
-}
-
-void erode(cv::Mat & src){
-	cv::Mat_<cv::Vec3b> img = src;
-	cv::Mat_<cv::Vec3b> result(src.rows, src.cols);
-	int margin = erodeSEsize / 2;
-	for (int i = 0; i < src.rows; i++){
-		for (int j = 0; j < src.cols; j++){
-			if (i - margin < 0 || j - margin < 0 || i + margin >= src.rows || j + margin >= src.cols)
-				result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = img(i, j)[0];
-			else {
-				fillWindow(i, j, img, 0, margin, erodeSEsize);
-				bool matched = true;
-				for (int a = 0; a < erodeSEsize; a++)
-					for (int b = 0; b < erodeSEsize; b++)
-						if (window[a][b] != 255 && SE5[a][b] == 1){
-							matched = false;
-							break;
-						}
-				if (matched)
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 255;
-				else
-					result(i, j)[0] = result(i, j)[1] = result(i, j)[2] = 0;
-			}
-		}
-	}
-	src = result;
-}
 int main(int, char *[]) {
 	
     std::cout << "Start ..." << std::endl;
 	loadImgs();	
-	/*source = originalImgs[2];
+	/*LottoWritings lottoWritings;
+	source = images[2].originalImg;
 	imshow(windowName, source);
 	cv::setMouseCallback(windowName, onMouse, 0);*/
 	
@@ -735,7 +622,10 @@ int main(int, char *[]) {
 		images[i].calcSegmentsParams();
 		images[i].filterEllipses();
 		images[i].findSegmentPairs();
+
+		//images[i].findLottoInSegmentsPairs();
 		images[i].showSegments();
+
 	}
 
 	//images[0].show();
