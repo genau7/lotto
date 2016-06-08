@@ -195,9 +195,10 @@ struct SegmentPair{
 	Pixel bottomRight;
 	float axisAngle;
 	bool isHorizontal;
-	float averageR;
-	SegmentPair(Segment* first, Segment* second){
-		if (first->area > second->area){
+	float averageD; //diameter
+	int maxCols, maxRows;
+	SegmentPair(Segment* first, Segment* second, int maxCols, int maxRows){
+		if (first->minCol <= second->minCol){
 			s1 = first;
 			s2 = second;
 		}
@@ -207,13 +208,10 @@ struct SegmentPair{
 		}
 		Pixel center1(s1->massCenter.x + s1->minCol, s1->massCenter.y + s1->minRow);
 		Pixel center2(s2->massCenter.x + s2->minCol, s2->massCenter.y + s2->minRow);
-		//float rowDistance = s1->massCenter.y + s1->minRow - s2->massCenter.y - s2->minRow;
-		//float colDistance = s1->massCenter.x + s1->minCol - s2->massCenter.x - s2->minCol;
 		float rowDistance = center1.y - center2.y;
 		float colDistance = center1.x - center2.x;
 		distance = sqrt(rowDistance*rowDistance + colDistance*colDistance);
-		areaRatio = (s2->area * 1.0 / s1->area);
-		//axis.calcCoefficients(s1->massCenter, s2->massCenter);
+		areaRatio = fabs(s2->area * 1.0 / s1->area);
 		axis.calcCoefficients(center1, center2);
 		upperLeft.x = (s1->minCol < s2->minCol) ? s1->minCol : s2->minCol;
 		upperLeft.y = (s1->minRow < s2->minRow) ? s1->minRow : s2->minRow;
@@ -221,8 +219,9 @@ struct SegmentPair{
 		bottomRight.y = (s1->maxRow > s2->maxRow) ? s1->maxRow : s2->maxRow;
 		axisAngle = 180.0 / 3.14 * fabs(axis.a);
 		isHorizontal = ((int)axisAngle / 45 == 0) ? true: false;
-		averageR = (s1->cols + s2->cols) * 1.0 / 2;
-
+		averageD = (s1->cols + s2->cols) * 1.0 / 2;
+		this->maxCols = maxCols;
+		this->maxRows = maxRows;
 	}
 	bool pixelOnAxis(int row, int col){
 		return axis.onTheLine(row, col);
@@ -232,6 +231,26 @@ struct SegmentPair{
 		Pixel b = s2->massCenter;
 		img[s1->massCenter.y + s1->minRow][s1->massCenter.x + s1->minCol] = 255;
 		img[s2->massCenter.y + s2->minRow][s2->massCenter.x +s2->minCol] = 255;
+	}
+	void expandBoundingBox(){
+		float upperLeftDec, bottomRightInc;
+		float dxUpperLeft, dyUpperLeft, dxBottomRight, dyBottomRight;
+		if (s1->minRow <= s2->minRow){
+			upperLeftDec = -0.6 * sqrt(s1->cols * s1->cols + s1->rows * s1->rows);
+			bottomRightInc = 0.6 * sqrt(s2->cols * s2->cols + s2->rows * s2->rows);
+		}
+		else{
+			upperLeftDec = -0.6 * sqrt(s2->cols * s2->cols + s2->rows * s2->rows);
+			bottomRightInc = 0.6 * sqrt(s1->cols * s1->cols + s1->rows * s1->rows);
+		}
+		dxUpperLeft = upperLeftDec / sqrt(axis.a*axis.a + 1);
+		dyUpperLeft = axis.a * dxUpperLeft;
+		dxBottomRight = bottomRightInc / sqrt(axis.a*axis.a + 1);
+		dyBottomRight = axis.a * dxBottomRight;
+		upperLeft.x = (upperLeft.x + dxUpperLeft >= 0) ? upperLeft.x + dxUpperLeft : 0;
+		upperLeft.y = (upperLeft.y + dyUpperLeft >= 0) ? upperLeft.y + dyUpperLeft : 0;
+		bottomRight.x = (bottomRight.x + dxBottomRight >= 0) ? bottomRight.x + dxBottomRight : 0;
+		bottomRight.y = (bottomRight.y + dyBottomRight >= 0) ? bottomRight.y + dyBottomRight : 0;
 	}
 };
 struct Img {
@@ -299,9 +318,10 @@ struct Img {
 	bool findSegmentPairs(){
 		for (int a = 0; a < segments.size() - 1; ++a)
 			for (int b = a + 1; b < segments.size(); ++b){
-				SegmentPair pair(&segments.at(a), &segments.at(b));
-				float distanceCoeff = pair.distance / pair.averageR;
+				SegmentPair pair(&segments.at(a), &segments.at(b), cols, rows);
+				float distanceCoeff = pair.distance / pair.averageD;
 				if (pair.areaRatio > 0.52  && (distanceCoeff >2.3 && distanceCoeff < 2.5)){
+					pair.expandBoundingBox();
 					segmentPairs.push_back(pair);				
 				}
 			}
@@ -315,6 +335,16 @@ struct Img {
 				//temp(i, j) = (labels[i][j] * 10) % 255;
 			}
 
+		//draw axis
+		for (int k = 0; k < segmentPairs.size(); ++k){
+			SegmentPair pair = segmentPairs.at(k);
+			for (int i = 0; i < rows; ++i)
+				for (int j = 0; j < cols; ++j) {
+					if (pair.pixelOnAxis(i, j))
+						temp[i][j] = 255;
+				}
+		}
+
 		//draw bounding box for each segment pair found
 		for (int k = 0; k < segmentPairs.size(); ++k){
 			SegmentPair pair = segmentPairs.at(k);
@@ -327,7 +357,7 @@ struct Img {
 
 			for (int i = pair.upperLeft.y; i <= pair.bottomRight.y; ++i)
 				for (int j = pair.upperLeft.x; j <= pair.bottomRight.x; ++j)
-					if (j == pair.upperLeft.x || j == pair.bottomRight.y)
+					if (j == pair.upperLeft.x || j == pair.bottomRight.x)
 						temp[i][j] = 255;
 			
 					
